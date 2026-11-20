@@ -1,0 +1,86 @@
+name: Build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tim source
+        id: src
+        shell: bash
+        run: |
+          set -e
+          DIR=""
+          if [ -f build.gradle ]; then
+            DIR="."
+          else
+            Z="$(ls -t *.zip 2>/dev/null | head -n 1 || true)"
+            if [ -n "$Z" ]; then
+              echo "Dung file: $Z"
+              rm -rf proj && mkdir proj
+              unzip -q "$Z" -d proj
+            fi
+            B="$(find . -name build.gradle -not -path './.git/*' | head -n 1 || true)"
+            if [ -z "$B" ]; then echo "Khong tim thay build.gradle"; exit 1; fi
+            DIR="$(dirname "$B")"
+          fi
+          echo "Source dir: $DIR"
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.12
+
+      - name: Build
+        shell: bash
+        working-directory: ${{ steps.src.outputs.dir }}
+        run: |
+          set +e
+          gradle build --no-daemon --console=plain > build.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then
+            echo "=============== LOI BUILD (gui doan nay cho minh) ==============="
+            grep -n -E "error:|What went wrong|Could not|Execution failed|symbol:|location:" -A4 build.log | head -150
+            echo "================================================================="
+          fi
+          exit $code
+
+      - name: Loi (neu co)
+        if: failure()
+        shell: bash
+        working-directory: ${{ steps.src.outputs.dir }}
+        run: |
+          {
+            echo '### Loi build'
+            echo '```'
+            grep -n -E "error:|FAILED|What went wrong|Could not|symbol:|location:" -A2 build.log | head -150
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: ${{ steps.src.outputs.dir }}/build.log
+          if-no-files-found: ignore
+
+      - name: Upload jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: LanAnhClient-jar
+          path: |
+            ${{ steps.src.outputs.dir }}/build/libs/*.jar
+            !${{ steps.src.outputs.dir }}/build/libs/*-sources.jar
+            !${{ steps.src.outputs.dir }}/build/libs/*-dev.jar
+          if-no-files-found: error
